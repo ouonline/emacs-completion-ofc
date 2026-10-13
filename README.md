@@ -20,15 +20,13 @@ Candidates are case sensitive but the matching behavior is not. Modified or newl
 
 ```lisp
 (if (< emacs-major-version 29)
-    (progn
-      (add-to-list 'load-path "/path/to/emacs-completion-ofc")
-      (require 'capf-ofc-token))
+    (add-to-list 'load-path "/path/to/emacs-completion-ofc")
   (unless (package-installed-p 'emacs-completion-ofc)
     (package-vc-install "https://github.com/ouonline/emacs-completion-ofc")))
 
+(require 'capf-ofc-token)
 (add-hook 'prog-mode-hook
           (lambda ()
-            (capf-ofc-token-init)
             (setq-local completion-at-point-functions '(capf-ofc-token))))
 ```
 

@@ -11,7 +11,7 @@
     (concat "[" (buffer-name buffer) "]")))
 
 (defun capf-ofc-token--exit (candidate status)
-  (when (eq status 'finished)
+  (when (memq status '(finished exact sole))
     (ofc-token--post-completion candidate)))
 
 (defun capf-ofc-token ()
@@ -26,8 +26,12 @@
           :annotation-function #'capf-ofc-token--get-annotation
           :exit-function #'capf-ofc-token--exit)))
 
-(defun capf-ofc-token-init ()
-  (ofc-token--after-buffer-created))
+(defun capf-ofc-token--after-change-major-mode ()
+  (when (memq #'capf-ofc-token completion-at-point-functions)
+    (ofc-token--after-buffer-created)))
+
+(add-hook 'after-change-major-mode-hook
+          #'capf-ofc-token--after-change-major-mode)
 
 (defun capf-ofc-token--try-completion (_string _collection _predicate _point)
   (cons "" 0))
@@ -54,6 +58,8 @@
                "capf-ofc-token"))
 
 (add-to-list 'completion-category-overrides
-             '(capf-ofc-token (styles . (capf-ofc-token))))
+             '(capf-ofc-token
+               (styles . (capf-ofc-token))
+               (display-sort-function . identity)))
 
 (provide 'capf-ofc-token)
