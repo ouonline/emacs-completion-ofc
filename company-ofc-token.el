@@ -1,7 +1,7 @@
 ;; -*- lexical-binding: t -*-
 
 (require 'cl-lib)
-(require 'ofc-token "./ofc-token.el")
+(require 'ofc-token)
 
 (defvar company-ofc-token--current-candidates '())
 
@@ -9,14 +9,12 @@
   (interactive (list 'interactive))
   (cl-case command
     (init (ofc-token--after-buffer-created))
-    (prefix (let ((prefix (ofc-token--grab-prefix)))
-              (when prefix
-                (setq company-ofc-token--current-candidates (ofc-token--find-candidates prefix))
-                (when company-ofc-token--current-candidates
-                  (when (consp (cdr company-ofc-token--current-candidates)) ;; candidates size > 1
-                    (setq company-ofc-token--current-candidates
-                          (ofc-token--sort-candidate-list prefix (length prefix) company-ofc-token--current-candidates)))
-                  prefix))))
+    (prefix (let ((range (ofc-token--grab-prefix-range)))
+              (when range
+                (let ((prefix (buffer-substring-no-properties (car range) (cdr range))))
+                  (setq company-ofc-token--current-candidates (ofc-token--find-candidates prefix))
+                  (when company-ofc-token--current-candidates
+                    prefix)))))
     (candidates company-ofc-token--current-candidates)
     (match (get-text-property 0 :matched-region-list arg))
     (annotation (let* ((token-info (get-text-property 0 :token-info arg))

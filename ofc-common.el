@@ -1,5 +1,7 @@
 ;; -*- lexical-binding: t -*-
 
+(require 'cl-lib)
+
 (defun ofc--fuzzy-compare (pattern pattern-length text text-length &optional matched-hook-func)
   "tells if `pattern` is part of `text`."
   (when (<= pattern-length text-length)

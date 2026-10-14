@@ -1,6 +1,6 @@
 ;; -*- lexical-binding: t -*-
 
-(require 'ofc-token "./ofc-token.el")
+(require 'ofc-token)
 
 (defun capf-ofc-token--completion-table (string predicate _action)
   (ofc-token--find-candidates string predicate))
@@ -14,17 +14,37 @@
   (when (memq status '(finished exact sole))
     (ofc-token--post-completion candidate)))
 
+(defun capf-ofc-token--collection (string predicate action)
+  (cond
+   ((eq action 'metadata)
+    '(metadata (category . capf-ofc-token)
+               (display-sort-function . identity)
+               (cycle-sort-function . identity)
+               (annotation-function . capf-ofc-token--get-annotation)))
+   ;; the whole prefix is a single field, there is no sub-field boundary.
+   ;; returning nil here keeps `completion-boundaries' from querying the
+   ;; candidates, which it would discard anyway.
+   ((eq (car-safe action) 'boundaries) nil)
+   ;; `test-completion': STRING is a valid completion only if it is an
+   ;; indexed token itself, not merely a prefix matching some candidates.
+   ((eq action 'lambda)
+    (and (gethash string ofc-token--token-hash)
+         (or (null predicate) (funcall predicate string))
+         t))
+   ;; `try-completion' and `all-completions'
+   (t
+    (complete-with-action
+     action
+     #'capf-ofc-token--completion-table
+     string
+     predicate))))
+
 (defun capf-ofc-token ()
-  (let* ((begin (save-excursion (skip-syntax-backward "w_") (point))))
-    (list begin (point)
-          (lambda (string predicate action)
-            (if (eq action 'metadata)
-                '(metadata (category . capf-ofc-token))
-              (complete-with-action action #'capf-ofc-token--completion-table string predicate)))
-          :exclusive 'no
-          :category 'capf-ofc-token
-          :annotation-function #'capf-ofc-token--get-annotation
-          :exit-function #'capf-ofc-token--exit)))
+  (let ((range (ofc-token--grab-prefix-range)))
+    (when range
+      (list (car range) (cdr range) #'capf-ofc-token--collection
+            :exclusive 'no
+            :exit-function #'capf-ofc-token--exit))))
 
 (defun capf-ofc-token--after-change-major-mode ()
   (when (memq #'capf-ofc-token completion-at-point-functions)
@@ -38,9 +58,6 @@
 
 (defun capf-ofc-token--all-completions (string collection predicate _point)
   (let ((candidates (all-completions string collection predicate)))
-    (when (and candidates
-               (consp (cdr candidates)))
-      (setq candidates (ofc-token--sort-candidate-list string (length string) candidates)))
     (mapc (lambda (candidate)
             (let ((matched-region-list (get-text-property 0 :matched-region-list candidate)))
               (mapc (lambda (region)
@@ -59,7 +76,6 @@
 
 (add-to-list 'completion-category-overrides
              '(capf-ofc-token
-               (styles . (capf-ofc-token))
-               (display-sort-function . identity)))
+               (styles . (capf-ofc-token))))
 
 (provide 'capf-ofc-token)

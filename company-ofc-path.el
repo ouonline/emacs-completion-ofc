@@ -1,7 +1,7 @@
 ;; -*- lexical-binding: t -*-
 
 (require 'cl-lib)
-(require 'ofc-path "./ofc-path.el")
+(require 'ofc-path)
 
 ;; (parent-dir . entry), updated when `prefix' is called
 (defvar company-ofc-path--prefix-info '())
