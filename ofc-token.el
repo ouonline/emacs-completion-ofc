@@ -18,7 +18,11 @@
 
 ;; `candidate-list' is a list of strings, each of which has the following text properties:
 ;;   * `token-info': an instance of `ofc-token--token-info-s'.
-;;   * `edit-distance': the edit distance between this token and the current input.
+;;   * `match-score': the cost of turning the current input into this token, one
+;;     point per character the token adds to the input, plus one point per matched
+;;     character whose case differs from the input.  that is the edit distance of
+;;     the alignment `ofc--fuzzy-compare' found, and the lower it is, the earlier
+;;     the candidate is sorted.
 ;;   * `matched-region-list': a list with the form `((begin1 . end1) (begin2 . end2) ...)`
 (cl-defstruct ofc-token--matched-item-s downcased-input candidate-list)
 
@@ -134,42 +138,49 @@
           reversed-matched-region-list)
       (cons (cons text-idx (+ 1 text-idx)) reversed-matched-region-list))))
 
-(defun ofc-token--do-gen-candidate (downcased-input input-length token token-info)
+(defun ofc-token--do-gen-candidate (input downcased-input input-length token token-info)
   "returns a matched candidate-token or nil."
   (let ((downcased-token (downcase token))
         (token-length (length token))
-        (reversed-matched-region-list '()))
+        (reversed-matched-region-list '())
+        (case-penalty 0))
     (when (ofc--fuzzy-compare
            downcased-input input-length downcased-token token-length
-           (lambda (text-idx)
+           (lambda (text-idx pattern-idx)
+             ;; the two characters are equal once downcased, so any difference
+             ;; left is a case difference, which an edit distance would charge
+             ;; as a substitution
+             (unless (eq (aref token text-idx) (aref input pattern-idx))
+               (cl-incf case-penalty))
              (setq reversed-matched-region-list
                    (ofc-token--record-reversed-matched-region text-idx reversed-matched-region-list))))
       (let ((new-candidate-token (substring-no-properties token)))
         (add-text-properties 0 token-length (list :token-info token-info
+                                                  :match-score (+ token-length case-penalty)
                                                   :matched-region-list
                                                   (nreverse reversed-matched-region-list))
                              new-candidate-token)
         new-candidate-token))))
 
-(defun ofc-token--generate-candidate-list-from-scratch (downcased-input input-length predicate)
+(defun ofc-token--generate-candidate-list-from-scratch (input downcased-input input-length predicate)
   "creates a list of token candidates."
   (let ((reversed-candidate-list '()))
     (maphash (lambda (token token-info)
                (when (funcall predicate token)
-                 (let ((new-candidate-token (ofc-token--do-gen-candidate downcased-input input-length
+                 (let ((new-candidate-token (ofc-token--do-gen-candidate input downcased-input input-length
                                                                          token token-info)))
                    (when new-candidate-token
                      (push new-candidate-token reversed-candidate-list)))))
              ofc-token--token-hash)
     (nreverse reversed-candidate-list)))
 
-(defun ofc-token--generate-candidate-list-from-another (downcased-input input-length another-candidate-list predicate)
+(defun ofc-token--generate-candidate-list-from-another (input downcased-input input-length another-candidate-list predicate)
   "creates a new candidate list from another."
   (let ((reversed-candidate-list '()))
     (mapc (lambda (candidate-token)
             (when (funcall predicate candidate-token)
               (let* ((token-info (get-text-property 0 :token-info candidate-token))
-                     (new-candidate-token (ofc-token--do-gen-candidate downcased-input input-length
+                     (new-candidate-token (ofc-token--do-gen-candidate input downcased-input input-length
                                                                        candidate-token token-info)))
                 (when new-candidate-token
                   (push new-candidate-token reversed-candidate-list)))))
@@ -195,15 +206,10 @@ keeps the stack bounded by the length of the token being typed."
       (pop ofc-token--matched-stack))
     (car ofc-token--matched-stack)))
 
-(defun ofc-token--sort-candidate-list (input input-length candidate-list)
-  "sort matched infos by their edit-distances and used-frequencies."
-  (mapc (lambda (candidate-token)
-          (let ((token-length (length candidate-token)))
-            (put-text-property 0 token-length
-                               :edit-distance (ofc--calc-edit-distance input input-length
-                                                                       candidate-token token-length)
-                               candidate-token)))
-        candidate-list)
+(defun ofc-token--sort-candidate-list (candidate-list)
+  "sort by used-frequency, then by `:match-score'.
+the score is token-length + the number of case mismatches, which is the edit
+distance of the alignment found by the fuzzy matcher."
   (cl-stable-sort candidate-list
                   (lambda (a b)
                     (let ((freq-a (ofc-token--token-info-s-used-freq
@@ -213,8 +219,8 @@ keeps the stack bounded by the length of the token being typed."
                       (if (> freq-a freq-b)
                           t
                         (when (= freq-a freq-b)
-                          (< (get-text-property 0 :edit-distance a)
-                             (get-text-property 0 :edit-distance b))))))))
+                          (< (get-text-property 0 :match-score a)
+                             (get-text-property 0 :match-score b))))))))
 
 (defun ofc-token--find-candidates (input &optional predicate)
   (let* ((input-length (length input))
@@ -225,19 +231,19 @@ keeps the stack bounded by the length of the token being typed."
     (if matched-item
         (setq candidate-list
               (ofc-token--generate-candidate-list-from-another
-               downcased-input input-length
+               input downcased-input input-length
                (ofc-token--matched-item-s-candidate-list matched-item)
                actual-pred))
       (setq candidate-list
             (ofc-token--generate-candidate-list-from-scratch
-             downcased-input input-length
+             input downcased-input input-length
              actual-pred)))
     (when candidate-list
       ;; `ofc-token--sort-candidate-list' is a destructive sort,
       ;; candidates MUST remain unchanged after return.
       (when (consp (cdr candidate-list)) ;; candidates size > 1
         (setq candidate-list
-              (ofc-token--sort-candidate-list input input-length candidate-list)))
+              (ofc-token--sort-candidate-list candidate-list)))
       (push (make-ofc-token--matched-item-s
              :downcased-input downcased-input
              :candidate-list candidate-list)

@@ -2,7 +2,7 @@
 
 These are fuzzy completion backends for the native Completion-At-Point-Function(`CAPF`) and [company-mode](https://github.com/company-mode/company-mode) of [Emacs](https://www.gnu.org/software/emacs/). `capf-ofc-token` and `company-ofc-token` are for token completions and `company-ofc-path` for path completions.
 
-Candidates are case sensitive but the matching behavior is not. Modified or newly inserted words of a buffer cannot be found until this buffer is saved. Candidates are sorted by their used frequencies and edit distances.
+Candidates are case sensitive but the matching behavior is not. Modified or newly inserted words of a buffer cannot be found until this buffer is saved. Candidates are sorted by their used frequencies and similarities.
 
 # Screenshots
 
