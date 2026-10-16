@@ -17,13 +17,13 @@
 (cl-defstruct ofc-token--token-info-s token used-freq buffer-list)
 
 ;; `candidate-list' is a list of strings, each of which has the following text properties:
-;;   * `token-info': an instance of `ofc-token--token-info-s'.
-;;   * `match-score': the cost of turning the current input into this token, one
+;;   * `ofc-token-info': an instance of `ofc-token--token-info-s'.
+;;   * `ofc-match-score': the cost of turning the current input into this token, one
 ;;     point per character the token adds to the input, plus one point per matched
 ;;     character whose case differs from the input.  that is the edit distance of
 ;;     the alignment `ofc--fuzzy-compare' found, and the lower it is, the earlier
 ;;     the candidate is sorted.
-;;   * `matched-region-list': a list with the form `((begin1 . end1) (begin2 . end2) ...)`
+;;   * `ofc-matched-regions': a list with the form `((begin1 . end1) (begin2 . end2) ...)`
 (cl-defstruct ofc-token--matched-item-s downcased-input candidate-list)
 
 ;; ------------------------------------------------------------------------- ;;
@@ -73,7 +73,7 @@
     (let ((buffer-list (ofc-token--token-info-s-buffer-list token-info)))
       ;; `buffer` is guranteed unique in `buffer-list` by the caller
       (setf (ofc-token--token-info-s-buffer-list token-info)
-            (append buffer-list (list buffer))))
+            (cons buffer buffer-list)))
     token-info))
 
 (defun ofc-token--remove-token-from-token-hash (token buffer)
@@ -125,24 +125,24 @@
             token-info-list)
       (remhash buffer ofc-token--buffer2tokens))))
 
-(defun ofc-token--record-reversed-matched-region (text-idx reversed-matched-region-list)
+(defun ofc-token--record-reversed-matched-regions (text-idx reversed-matched-regions)
   "updates the matched regions and returns it, in the reversed form of
  `((beginN . endN) ... (begin1 . end1))`. the caller is responsible for
  reversing them back into ascending order."
-  (let ((last-region (car reversed-matched-region-list)))
+  (let ((last-region (car reversed-matched-regions)))
     ;; merge current matched position to previous if they are adjacent
     (if (and last-region
              (= text-idx (cdr last-region)))
         (progn
           (cl-incf (cdr last-region))
-          reversed-matched-region-list)
-      (cons (cons text-idx (+ 1 text-idx)) reversed-matched-region-list))))
+          reversed-matched-regions)
+      (cons (cons text-idx (+ 1 text-idx)) reversed-matched-regions))))
 
 (defun ofc-token--do-gen-candidate (input downcased-input input-length token token-info)
   "returns a matched candidate-token or nil."
   (let ((downcased-token (downcase token))
         (token-length (length token))
-        (reversed-matched-region-list '())
+        (reversed-matched-regions '())
         (case-penalty 0))
     (when (ofc--fuzzy-compare
            downcased-input input-length downcased-token token-length
@@ -152,13 +152,13 @@
              ;; as a substitution
              (unless (eq (aref token text-idx) (aref input pattern-idx))
                (cl-incf case-penalty))
-             (setq reversed-matched-region-list
-                   (ofc-token--record-reversed-matched-region text-idx reversed-matched-region-list))))
+             (setq reversed-matched-regions
+                   (ofc-token--record-reversed-matched-regions text-idx reversed-matched-regions))))
       (let ((new-candidate-token (substring-no-properties token)))
-        (add-text-properties 0 token-length (list :token-info token-info
-                                                  :match-score (+ token-length case-penalty)
-                                                  :matched-region-list
-                                                  (nreverse reversed-matched-region-list))
+        (add-text-properties 0 token-length
+                             (list :ofc-token-info token-info
+                                   :ofc-match-score (+ token-length case-penalty)
+                                   :ofc-matched-regions (nreverse reversed-matched-regions))
                              new-candidate-token)
         new-candidate-token))))
 
@@ -179,7 +179,7 @@
   (let ((reversed-candidate-list '()))
     (mapc (lambda (candidate-token)
             (when (funcall predicate candidate-token)
-              (let* ((token-info (get-text-property 0 :token-info candidate-token))
+              (let* ((token-info (get-text-property 0 :ofc-token-info candidate-token))
                      (new-candidate-token (ofc-token--do-gen-candidate input downcased-input input-length
                                                                        candidate-token token-info)))
                 (when new-candidate-token
@@ -207,20 +207,20 @@ keeps the stack bounded by the length of the token being typed."
     (car ofc-token--matched-stack)))
 
 (defun ofc-token--sort-candidate-list (candidate-list)
-  "sort by used-frequency, then by `:match-score'.
+  "sort by used-frequency, then by `:ofc-match-score'.
 the score is token-length + the number of case mismatches, which is the edit
 distance of the alignment found by the fuzzy matcher."
   (cl-stable-sort candidate-list
                   (lambda (a b)
                     (let ((freq-a (ofc-token--token-info-s-used-freq
-                                   (get-text-property 0 :token-info a)))
+                                   (get-text-property 0 :ofc-token-info a)))
                           (freq-b (ofc-token--token-info-s-used-freq
-                                   (get-text-property 0 :token-info b))))
+                                   (get-text-property 0 :ofc-token-info b))))
                       (if (> freq-a freq-b)
                           t
                         (when (= freq-a freq-b)
-                          (< (get-text-property 0 :match-score a)
-                             (get-text-property 0 :match-score b))))))))
+                          (< (get-text-property 0 :ofc-match-score a)
+                             (get-text-property 0 :ofc-match-score b))))))))
 
 (defun ofc-token--find-candidates (input &optional predicate)
   (let* ((input-length (length input))
@@ -252,8 +252,8 @@ distance of the alignment found by the fuzzy matcher."
 
 (defun ofc-token--grab-prefix-range ()
   "returns (begin . end) or nil"
-  (let* ((end (point))
-         (begin (save-excursion (skip-syntax-backward "w_") (point))))
+  (let ((end (point))
+        (begin (save-excursion (skip-syntax-backward "w_") (point))))
     (if (= end begin)
         (progn
           (setq ofc-token--matched-stack '())
@@ -271,7 +271,7 @@ distance of the alignment found by the fuzzy matcher."
 (defun ofc-token--post-completion (candidate-token)
   ;; update frequency of the matched token info
   (cl-incf (ofc-token--token-info-s-used-freq
-            (get-text-property 0 :token-info candidate-token)))
+            (get-text-property 0 :ofc-token-info candidate-token)))
   ;; remove overlapping suffix
   (let ((suffix (ofc-token--grab-suffix)))
     (when suffix
@@ -291,7 +291,7 @@ distance of the alignment found by the fuzzy matcher."
 (defun ofc-token--after-buffer-created ()
   (add-hook 'after-save-hook #'ofc-token--after-buffer-saved 0 t)
   (add-hook 'kill-buffer-hook #'ofc-token--before-buffer-killed 0 t)
-  (setq ofc-token--matched-stack '()) ;; the new tokens below are invisible to it
+  (setq ofc-token--matched-stack '())
   (ofc-token--update-buffer-tokens (current-buffer)))
 
 (provide 'ofc-token)

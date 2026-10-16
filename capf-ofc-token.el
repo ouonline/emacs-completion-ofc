@@ -2,11 +2,11 @@
 
 (require 'ofc-token)
 
-(defun capf-ofc-token--completion-table (string predicate _action)
+(defun capf-ofc-token--candidates (string predicate _action)
   (ofc-token--find-candidates string predicate))
 
 (defun capf-ofc-token--get-annotation (candidate)
-  (let* ((token-info (get-text-property 0 :token-info candidate))
+  (let* ((token-info (get-text-property 0 :ofc-token-info candidate))
          (buffer (car (ofc-token--token-info-s-buffer-list token-info))))
     (concat "[" (buffer-name buffer) "]")))
 
@@ -14,7 +14,7 @@
   (when (memq status '(finished exact sole))
     (ofc-token--post-completion candidate)))
 
-(defun capf-ofc-token--collection (string predicate action)
+(defun capf-ofc-token--completion-table (string predicate action)
   (cond
    ((eq action 'metadata)
     '(metadata (category . capf-ofc-token)
@@ -35,14 +35,15 @@
    (t
     (complete-with-action
      action
-     #'capf-ofc-token--completion-table
+     #'capf-ofc-token--candidates
      string
      predicate))))
 
 (defun capf-ofc-token ()
   (let ((range (ofc-token--grab-prefix-range)))
     (when range
-      (list (car range) (cdr range) #'capf-ofc-token--collection
+      (list (car range) (cdr range)
+            #'capf-ofc-token--completion-table
             :exclusive 'no
             :exit-function #'capf-ofc-token--exit))))
 
@@ -59,13 +60,13 @@
 (defun capf-ofc-token--all-completions (string collection predicate _point)
   (let ((candidates (all-completions string collection predicate)))
     (mapc (lambda (candidate)
-            (let ((matched-region-list (get-text-property 0 :matched-region-list candidate)))
+            (let ((matched-regions (get-text-property 0 :ofc-matched-regions candidate)))
               (mapc (lambda (region)
                       (add-text-properties
                        (car region) (cdr region)
                        '(face completions-common-part)
                        candidate))
-                    matched-region-list)))
+                    matched-regions)))
           candidates)))
 
 (add-to-list 'completion-styles-alist
