@@ -8,7 +8,7 @@
 (defun capf-ofc-token--get-annotation (candidate)
   (let* ((token-info (get-text-property 0 :ofc-token-info candidate))
          (buffer (car (ofc-token--token-info-s-buffer-list token-info))))
-    (concat "[" (buffer-name buffer) "]")))
+    (concat " [" (buffer-name buffer) "]")))
 
 (defun capf-ofc-token--exit (candidate status)
   (when (memq status '(finished exact sole))
@@ -57,17 +57,26 @@
 (defun capf-ofc-token--try-completion (_string _collection _predicate _point)
   (cons "" 0))
 
+(defun capf-ofc-token--hilit (candidate)
+  "Highlight the matched regions of CANDIDATE in place and return it."
+  (let ((matched-regions (get-text-property 0 :ofc-matched-regions candidate)))
+    (mapc (lambda (region)
+            (add-face-text-property
+             (car region) (cdr region)
+             'completions-common-part
+             nil candidate))
+          matched-regions))
+  candidate)
+
 (defun capf-ofc-token--all-completions (string collection predicate _point)
   (let ((candidates (all-completions string collection predicate)))
-    (mapc (lambda (candidate)
-            (let ((matched-regions (get-text-property 0 :ofc-matched-regions candidate)))
-              (mapc (lambda (region)
-                      (add-text-properties
-                       (car region) (cdr region)
-                       '(face completions-common-part)
-                       candidate))
-                    matched-regions)))
-          candidates)))
+    (if completion-lazy-hilit
+        ;; the frontend will call this function later, only for candidates
+        ;; that are actually displayed
+        (setq completion-lazy-hilit-fn #'capf-ofc-token--hilit)
+      ;; frontends without lazy highlighting support render eagerly
+      (mapc #'capf-ofc-token--hilit candidates))
+    candidates))
 
 (add-to-list 'completion-styles-alist
              '(capf-ofc-token
