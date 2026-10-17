@@ -14,7 +14,11 @@
 
 ;; `used-freq' is the used frequency of `token' in its life time.
 ;; `buffer-list' is a list of buffer(s) where this token occurs.
-(cl-defstruct ofc-token--token-info-s token used-freq buffer-list)
+;; `downcased-token' is `token' downcased mainly for reducing GC overhead, and
+;; `char-mask' a 32-bit set of its characters.  Both are derived once at
+;; indexing time and used as a cheap necessary condition when matching
+;; (see `ofc-token--string-char-mask').
+(cl-defstruct ofc-token--token-info-s token used-freq buffer-list downcased-token char-mask)
 
 ;; `candidate-list' is a list of strings, each of which has the following text properties:
 ;;   * `ofc-token-info': an instance of `ofc-token--token-info-s'.
@@ -60,15 +64,31 @@
                 (when (< symbol-end end)
                   (forward-char))))))))))
 
+(defun ofc-token--string-char-mask (string)
+  "Return a 32-bit set of the characters in STRING.
+Every character of a pattern must be present in the token for it to
+match, so the mask is a cheap necessary condition before running the
+fuzzy scan.  Character code collisions only cause false positives."
+  (let ((mask 0)
+        (idx 0)
+        (len (length string)))
+    (while (< idx len)
+      (setq mask (logior mask (ash 1 (logand (aref string idx) 31))))
+      (setq idx (1+ idx)))
+    mask))
+
 (defun ofc-token--find-or-insert-token-hash (token buffer)
   "Find or insert an instance of `ofc-token--token-info-s' for TOKEN in
 `ofc-token--token-hash', adding BUFFER, and return that instance."
   (let ((token-info (gethash token ofc-token--token-hash)))
     (unless token-info
-      (setq token-info (make-ofc-token--token-info-s
-                        :token token
-                        :used-freq 0
-                        :buffer-list '()))
+      (let ((downcased-token (downcase token)))
+        (setq token-info (make-ofc-token--token-info-s
+                          :token token
+                          :used-freq 0
+                          :buffer-list '()
+                          :downcased-token downcased-token
+                          :char-mask (ofc-token--string-char-mask downcased-token))))
       (puthash token token-info ofc-token--token-hash))
     (let ((buffer-list (ofc-token--token-info-s-buffer-list token-info)))
       ;; `buffer` is guranteed unique in `buffer-list` by the caller
@@ -140,7 +160,7 @@
 
 (defun ofc-token--do-gen-candidate (input downcased-input input-length token token-info)
   "returns a matched candidate-token or nil."
-  (let ((downcased-token (downcase token))
+  (let ((downcased-token (ofc-token--token-info-s-downcased-token token-info))
         (token-length (length token))
         (reversed-matched-regions '())
         (case-penalty 0))
@@ -162,11 +182,14 @@
                              new-candidate-token)
         new-candidate-token))))
 
-(defun ofc-token--generate-candidate-list-from-scratch (input downcased-input input-length predicate)
+(defun ofc-token--generate-candidate-list-from-scratch (input downcased-input input-length input-mask predicate)
   "creates a list of token candidates."
   (let ((reversed-candidate-list '()))
     (maphash (lambda (token token-info)
-               (when (funcall predicate token)
+               (when (and (= input-mask
+                             (logand input-mask
+                                     (ofc-token--token-info-s-char-mask token-info)))
+                          (funcall predicate token))
                  (let ((new-candidate-token (ofc-token--do-gen-candidate input downcased-input input-length
                                                                          token token-info)))
                    (when new-candidate-token
@@ -174,16 +197,19 @@
              ofc-token--token-hash)
     (nreverse reversed-candidate-list)))
 
-(defun ofc-token--generate-candidate-list-from-another (input downcased-input input-length another-candidate-list predicate)
+(defun ofc-token--generate-candidate-list-from-another (input downcased-input input-length input-mask another-candidate-list predicate)
   "creates a new candidate list from another."
   (let ((reversed-candidate-list '()))
     (mapc (lambda (candidate-token)
-            (when (funcall predicate candidate-token)
-              (let* ((token-info (get-text-property 0 :ofc-token-info candidate-token))
-                     (new-candidate-token (ofc-token--do-gen-candidate input downcased-input input-length
-                                                                       candidate-token token-info)))
-                (when new-candidate-token
-                  (push new-candidate-token reversed-candidate-list)))))
+            (let ((token-info (get-text-property 0 :ofc-token-info candidate-token)))
+              (when (and (= input-mask
+                            (logand input-mask
+                                    (ofc-token--token-info-s-char-mask token-info)))
+                         (funcall predicate candidate-token))
+                (let ((new-candidate-token (ofc-token--do-gen-candidate input downcased-input input-length
+                                                                        candidate-token token-info)))
+                  (when new-candidate-token
+                    (push new-candidate-token reversed-candidate-list))))))
           another-candidate-list)
     (nreverse reversed-candidate-list)))
 
@@ -226,17 +252,18 @@ distance of the alignment found by the fuzzy matcher."
   (let* ((input-length (length input))
          (actual-pred (or predicate (lambda (_) t)))
          (downcased-input (downcase input))
+         (input-mask (ofc-token--string-char-mask downcased-input))
          (matched-item (ofc-token--find-matched-item-in-stack downcased-input))
          (candidate-list '()))
     (if matched-item
         (setq candidate-list
               (ofc-token--generate-candidate-list-from-another
-               input downcased-input input-length
+               input downcased-input input-length input-mask
                (ofc-token--matched-item-s-candidate-list matched-item)
                actual-pred))
       (setq candidate-list
             (ofc-token--generate-candidate-list-from-scratch
-             input downcased-input input-length
+             input downcased-input input-length input-mask
              actual-pred)))
     (when candidate-list
       ;; `ofc-token--sort-candidate-list' is a destructive sort,
