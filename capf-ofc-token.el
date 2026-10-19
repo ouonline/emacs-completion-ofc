@@ -7,7 +7,7 @@
 
 (defun capf-ofc-token--get-annotation (candidate)
   (let* ((token-info (get-text-property 0 :ofc-token-info candidate))
-         (buffer (car (ofc-token--token-info-s-buffer-list token-info))))
+         (buffer (caar (ofc-token--token-info-s-buffer-list token-info))))
     (concat " [" (buffer-name buffer) "]")))
 
 (defun capf-ofc-token--exit (candidate status)
@@ -28,7 +28,7 @@
    ;; `test-completion': STRING is a valid completion only if it is an
    ;; indexed token itself, not merely a prefix matching some candidates.
    ((eq action 'lambda)
-    (and (gethash string ofc-token--token-hash)
+    (and (gethash string ofc-token--token2info)
          (or (null predicate) (funcall predicate string))
          t))
    ;; `try-completion' and `all-completions'

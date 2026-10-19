@@ -4,6 +4,8 @@ These are fuzzy completion backends for the native completion-at-point-functions
 
 Candidates are case sensitive but the matching behavior is not. Modified or newly inserted words of a buffer cannot be found until this buffer is saved. Candidates are sorted by their used frequencies and similarities.
 
+`track-changes`(included in Emacs >= 30 and available in MELPA) is required.
+
 # Screenshots
 
 ## Token Completions
@@ -17,10 +19,8 @@ Candidates are case sensitive but the matching behavior is not. Modified or newl
 # Settings
 
 ```lisp
-(if (< emacs-major-version 29)
-    (add-to-list 'load-path "/path/to/emacs-completion-ofc")
-  (unless (package-installed-p 'emacs-completion-ofc)
-    (package-vc-install "https://github.com/ouonline/emacs-completion-ofc")))
+(unless (package-installed-p 'emacs-completion-ofc)
+  (package-vc-install "https://github.com/ouonline/emacs-completion-ofc"))
 
 (require 'capf-ofc-token)
 

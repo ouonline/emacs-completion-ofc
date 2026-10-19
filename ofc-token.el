@@ -2,6 +2,7 @@
 
 (require 'cl-lib)
 (require 'ofc-common)
+(require 'track-changes)
 
 ;; ------------------------------------------------------------------------- ;;
 ;; settings
@@ -13,7 +14,7 @@
 ;; struct definitions
 
 ;; `used-freq' is the used frequency of `token' in its life time.
-;; `buffer-list' is a list of buffer(s) where this token occurs.
+;; `buffer-list' is a list of (buffer . count) of this token.
 ;; `downcased-token' is `token' downcased mainly for reducing GC overhead, and
 ;; `char-mask' a 32-bit set of its characters.  Both are derived once at
 ;; indexing time and used as a cheap necessary condition when matching
@@ -33,36 +34,41 @@
 ;; ------------------------------------------------------------------------- ;;
 ;; global variables
 
-(define-hash-table-test 'ofc-token--token-hash-strcmp 'string= 'sxhash-equal)
+(define-hash-table-test 'ofc-token--token2info-strcmp 'string= 'sxhash-equal)
 
 ;; a hash table containing all tokens:
 ;;   token => `ofc-token--token-info-s'
-(defvar ofc-token--token-hash (make-hash-table :test 'ofc-token--token-hash-strcmp))
+(defvar ofc-token--token2info (make-hash-table :test 'ofc-token--token2info-strcmp))
 
 ;; a hash table containing all `ofc-token--token-info-s' of a buffer:
-;;   buffer => (list `ofc-token--token-info-s' ...)
+;;   buffer => (hash-table token => `ofc-token--token-info-s')
+;; the values are shared with `ofc-token--token2info'.
 (defvar ofc-token--buffer2tokens (make-hash-table :test 'eq))
 
 ;; each element of this stack is an instance of `ofc-token--matched-item-s'.
 (defvar ofc-token--matched-stack '())
 
+;; tracker used to update only edited regions on save per-buffer.
+(defvar-local ofc-token--change-tracker nil)
+
 ;; ------------------------------------------------------------------------- ;;
 
-(defun ofc-token--for-each-token-in-buffer (buffer callback-func)
-  (with-current-buffer buffer
-    (let ((end (point-max)))
-      (save-excursion
-        (goto-char (point-min))
-        (while (< (point) end)
-          (skip-syntax-forward " ") ;; skip over whitespace and other non-symbol characters
-          (let ((symbol-start (point)))
-            (skip-syntax-forward "w_")
-            (let ((symbol-end (point)))
-              (if (> symbol-end symbol-start)
-                  (funcall callback-func
-                           (buffer-substring-no-properties symbol-start symbol-end))
-                (when (< symbol-end end)
-                  (forward-char))))))))))
+(defun ofc-token--for-each-token-in-region (begin end callback-func)
+  (save-excursion
+    (goto-char begin)
+    (while (< (point) end)
+      (skip-syntax-forward " ") ;; skip over whitespace and other non-symbol characters
+      (when (< (point) end)
+        (let ((symbol-begin (point)))
+          (skip-syntax-forward "w_")
+          (let ((symbol-end (point)))
+            (if (> symbol-end symbol-begin)
+                (funcall callback-func symbol-begin symbol-end)
+              (when (< symbol-end end)
+                (forward-char)))))))))
+
+(defun ofc-token--for-each-token-in-buffer (callback-func)
+  (ofc-token--for-each-token-in-region (point-min) (point-max) callback-func))
 
 (defun ofc-token--string-char-mask (string)
   "Return a 32-bit set of the characters in STRING.
@@ -77,73 +83,53 @@ fuzzy scan.  Character code collisions only cause false positives."
       (setq idx (1+ idx)))
     mask))
 
-(defun ofc-token--find-or-insert-token-hash (token buffer)
-  "Find or insert an instance of `ofc-token--token-info-s' for TOKEN in
-`ofc-token--token-hash', adding BUFFER, and return that instance."
-  (let ((token-info (gethash token ofc-token--token-hash)))
-    (unless token-info
-      (let ((downcased-token (downcase token)))
-        (setq token-info (make-ofc-token--token-info-s
-                          :token token
-                          :used-freq 0
-                          :buffer-list '()
-                          :downcased-token downcased-token
-                          :char-mask (ofc-token--string-char-mask downcased-token))))
-      (puthash token token-info ofc-token--token-hash))
-    (let ((buffer-list (ofc-token--token-info-s-buffer-list token-info)))
-      ;; `buffer` is guranteed unique in `buffer-list` by the caller
-      (setf (ofc-token--token-info-s-buffer-list token-info)
-            (cons buffer buffer-list)))
-    token-info))
+(defun ofc-token--load-buffer-tokens-in-region (start stop)
+  (unless (string-match-p "*temp*" (buffer-name))
+    (let* ((buffer (current-buffer))
+           (token-table
+            (or (gethash buffer ofc-token--buffer2tokens)
+                (make-hash-table :test 'ofc-token--token2info-strcmp))))
+      (ofc-token--for-each-token-in-region
+       start stop
+       (lambda (begin end)
+         (when (>= (- end begin) ofc-token-min-len)
+           (let* ((token (buffer-substring-no-properties begin end))
+                  (info (gethash token ofc-token--token2info)))
+             (if info
+                 (let ((buf-and-occur
+                        (assq buffer (ofc-token--token-info-s-buffer-list info))))
+                   (if buf-and-occur
+                       (cl-incf (cdr buf-and-occur))
+                     (push (cons buffer 1)
+                           (ofc-token--token-info-s-buffer-list info))))
+               (let ((downcased-token (downcase token)))
+                 (setq info
+                       (make-ofc-token--token-info-s
+                        :token token
+                        :used-freq 0
+                        :buffer-list (list (cons buffer 1))
+                        :downcased-token downcased-token
+                        :char-mask (ofc-token--string-char-mask downcased-token))))
+               (puthash token info ofc-token--token2info))
+             ;; share the same `ofc-token--token-info-s' with `ofc-token--token2info'
+             (puthash token info token-table)))))
+      (puthash buffer token-table ofc-token--buffer2tokens))))
 
-(defun ofc-token--remove-token-from-token-hash (token buffer)
-  (let ((token-info (gethash token ofc-token--token-hash)))
-    (when token-info
-      (let ((buffer-list (ofc-token--token-info-s-buffer-list token-info)))
-        (setq buffer-list (delete buffer buffer-list))
-        (if (eq nil buffer-list)
-            (remhash token ofc-token--token-hash)
-          (setf (ofc-token--token-info-s-buffer-list token-info) buffer-list))))))
-
-(defun ofc-token--update-buffer-tokens (buffer)
-  (unless (string-match-p "*temp*" (buffer-name buffer))
-    (let ((new-token-set (make-hash-table :test 'ofc-token--token-hash-strcmp)))
-      ;; construct a new-token-set for the modified buffer
-      (ofc-token--for-each-token-in-buffer buffer
-                                           (lambda (token)
-                                             (when (>= (length token) ofc-token-min-len)
-                                               (puthash token t new-token-set))))
-      (let ((old-token-info-list (gethash buffer ofc-token--buffer2tokens '()))
-            (reversed-token-info-list '()))
-        (mapc (lambda (token-info)
-                (let* ((token (ofc-token--token-info-s-token token-info))
-                       (found (gethash token new-token-set)))
-                  (if found
-                      ;; if a token in the new-token-set exists in the old one, delete it from new-token-set
-                      ;; so that it remains unchanged in `ofc-token--token-hash'
-                      (progn
-                        (remhash token new-token-set)
-                        (push token-info reversed-token-info-list))
-                    ;; otherwise remove it from `ofc-token--token-hash`
-                    (ofc-token--remove-token-from-token-hash token buffer))))
-              old-token-info-list)
-        (maphash (lambda (token _)
-                   (let ((token-info (ofc-token--find-or-insert-token-hash token buffer)))
-                     (push token-info reversed-token-info-list)))
-                 new-token-set)
-        (puthash buffer (nreverse reversed-token-info-list) ofc-token--buffer2tokens)))))
-
-(defun ofc-token--destroy-buffer-tokens (buffer)
-  (let ((token-info-list (gethash buffer ofc-token--buffer2tokens)))
-    (when token-info-list
-      (mapc (lambda (token-info)
-              (let ((buffer-list (ofc-token--token-info-s-buffer-list token-info)))
-                (setq buffer-list (delete buffer buffer-list))
-                (if (eq nil buffer-list)
-                    (remhash (ofc-token--token-info-s-token token-info) ofc-token--token-hash)
-                  (setf (ofc-token--token-info-s-buffer-list token-info) buffer-list))))
-            token-info-list)
-      (remhash buffer ofc-token--buffer2tokens))))
+(defun ofc-token--destroy-buffer-tokens ()
+  (let* ((buffer (current-buffer))
+         (token-table (gethash buffer ofc-token--buffer2tokens)))
+    (when token-table
+      (maphash (lambda (token token-info)
+                 (let ((buffer-list (ofc-token--token-info-s-buffer-list token-info)))
+                   (setq buffer-list (cl-delete-if (lambda (buf-and-occur)
+                                                     (eq buffer (car buf-and-occur)))
+                                                   buffer-list))
+                   (if (null buffer-list)
+                       (remhash token ofc-token--token2info)
+                     (setf (ofc-token--token-info-s-buffer-list token-info) buffer-list))))
+               token-table)
+      (remhash buffer ofc-token--buffer2tokens)))
+  (setq ofc-token--matched-stack '()))
 
 (defun ofc-token--record-reversed-matched-regions (text-idx reversed-matched-regions)
   "updates the matched regions and returns it, in the reversed form of
@@ -173,7 +159,8 @@ fuzzy scan.  Character code collisions only cause false positives."
              (unless (eq (aref token text-idx) (aref input pattern-idx))
                (cl-incf case-penalty))
              (setq reversed-matched-regions
-                   (ofc-token--record-reversed-matched-regions text-idx reversed-matched-regions))))
+                   (ofc-token--record-reversed-matched-regions
+                    text-idx reversed-matched-regions))))
       (let ((new-candidate-token (substring-no-properties token)))
         (add-text-properties 0 token-length
                              (list :ofc-token-info token-info
@@ -182,7 +169,8 @@ fuzzy scan.  Character code collisions only cause false positives."
                              new-candidate-token)
         new-candidate-token))))
 
-(defun ofc-token--generate-candidate-list-from-scratch (input downcased-input input-length input-mask predicate)
+(defun ofc-token--generate-candidate-list-from-scratch
+    (input downcased-input input-length input-mask predicate)
   "creates a list of token candidates."
   (let ((reversed-candidate-list '()))
     (maphash (lambda (token token-info)
@@ -190,15 +178,16 @@ fuzzy scan.  Character code collisions only cause false positives."
                              (logand input-mask
                                      (ofc-token--token-info-s-char-mask token-info)))
                           (funcall predicate token))
-                 (let ((new-candidate-token (ofc-token--do-gen-candidate input downcased-input input-length
-                                                                         token token-info)))
+                 (let ((new-candidate-token
+                        (ofc-token--do-gen-candidate input downcased-input input-length
+                                                     token token-info)))
                    (when new-candidate-token
                      (push new-candidate-token reversed-candidate-list)))))
-             ofc-token--token-hash)
+             ofc-token--token2info)
     (nreverse reversed-candidate-list)))
 
-(defun ofc-token--generate-candidate-list-from-another (input downcased-input input-length input-mask another-candidate-list predicate)
-  "creates a new candidate list from another."
+(defun ofc-token--generate-candidate-list-from-another
+    (input downcased-input input-length input-mask another-candidate-list predicate)
   (let ((reversed-candidate-list '()))
     (mapc (lambda (candidate-token)
             (let ((token-info (get-text-property 0 :ofc-token-info candidate-token)))
@@ -206,23 +195,15 @@ fuzzy scan.  Character code collisions only cause false positives."
                             (logand input-mask
                                     (ofc-token--token-info-s-char-mask token-info)))
                          (funcall predicate candidate-token))
-                (let ((new-candidate-token (ofc-token--do-gen-candidate input downcased-input input-length
-                                                                        candidate-token token-info)))
+                (let ((new-candidate-token
+                       (ofc-token--do-gen-candidate input downcased-input input-length
+                                                    candidate-token token-info)))
                   (when new-candidate-token
                     (push new-candidate-token reversed-candidate-list))))))
           another-candidate-list)
     (nreverse reversed-candidate-list)))
 
 (defun ofc-token--find-matched-item-in-stack (downcased-input)
-  "pops the cached items that DOWNCASED-INPUT can not be narrowed down from,
- and returns the remaining top one, or nil.
-
-An item is a valid base only if its input is a strict prefix of DOWNCASED-INPUT:
-every token matching DOWNCASED-INPUT matches any prefix of it as well, so the
-item's candidate list is guaranteed to be a superset of the new one.  Items
-failing this test are stale -- point has jumped to another token or to another
-buffer without passing through an empty prefix -- and get dropped, which also
-keeps the stack bounded by the length of the token being typed."
   (let ((input-length (length downcased-input)))
     (while (and ofc-token--matched-stack
                 (let ((pre-substr (ofc-token--matched-item-s-downcased-input
@@ -233,9 +214,6 @@ keeps the stack bounded by the length of the token being typed."
     (car ofc-token--matched-stack)))
 
 (defun ofc-token--sort-candidate-list (candidate-list)
-  "sort by used-frequency, then by `:ofc-match-score'.
-the score is token-length + the number of case mismatches, which is the edit
-distance of the alignment found by the fuzzy matcher."
   (cl-stable-sort candidate-list
                   (lambda (a b)
                     (let ((freq-a (ofc-token--token-info-s-used-freq
@@ -304,21 +282,86 @@ distance of the alignment found by the fuzzy matcher."
     (when suffix
       (let ((suffix-length (length suffix)))
         (when (ofc--fuzzy-compare (downcase suffix) suffix-length
-                                  (downcase candidate-token) (length candidate-token))
+                                  (downcase candidate-token)
+                                  (length candidate-token))
           (delete-char suffix-length)))))
   (setq ofc-token--matched-stack '()))
 
+(defun ofc-token--destroy-tokens-in-string (str)
+  (let ((real-buffer (current-buffer))
+        (current-syntax (syntax-table)))
+    (with-temp-buffer
+      (insert str)
+      (with-syntax-table current-syntax
+        (ofc-token--for-each-token-in-buffer
+         (lambda (begin end)
+           (when (>= (- end begin) ofc-token-min-len)
+             (let* ((token (buffer-substring-no-properties begin end))
+                    (token-info (gethash token ofc-token--token2info)))
+               (when token-info
+                 (let ((buf-and-occur (assq real-buffer
+                                            (ofc-token--token-info-s-buffer-list token-info))))
+                   (when buf-and-occur
+                     (if (> (cdr buf-and-occur) 1)
+                         (cl-decf (cdr buf-and-occur))
+                       (setf (ofc-token--token-info-s-buffer-list token-info)
+                             (delq buf-and-occur
+                                   (ofc-token--token-info-s-buffer-list token-info)))
+                       (unless (ofc-token--token-info-s-buffer-list token-info)
+                         (remhash token ofc-token--token2info))
+                       (let ((token-table (gethash real-buffer ofc-token--buffer2tokens)))
+                         (when token-table
+                           (remhash token token-table))))))))))))))
+  (setq ofc-token--matched-stack '()))
+
+(defun ofc-token--update-tokens-in-region (begin end before)
+  (unless (string-match-p "*temp*" (buffer-name))
+    (save-restriction
+      (widen)
+      ;; expand `begin' and `end' to the syntax token boundaries
+      (let ((start (save-excursion
+                     (goto-char begin)
+                     (skip-syntax-backward "w_")
+                     (point)))
+            (stop (save-excursion
+                    (goto-char end)
+                    (skip-syntax-forward "w_")
+                    (point))))
+        (ofc-token--load-buffer-tokens-in-region start stop)
+        (ofc-token--destroy-tokens-in-string
+         (concat (buffer-substring-no-properties start begin)
+                 before
+                 (buffer-substring-no-properties end stop)))))))
+
+(defun ofc-token--update-tokens-from-tracker ()
+  (track-changes-fetch ofc-token--change-tracker
+                       #'ofc-token--update-tokens-in-region))
+
 (defun ofc-token--after-buffer-saved ()
   (setq ofc-token--matched-stack '())
-  (ofc-token--update-buffer-tokens (current-buffer)))
+  (ofc-token--update-tokens-from-tracker))
+
+(defun ofc-token--register-change-tracker ()
+  (setq ofc-token--change-tracker (track-changes-register #'ignore)))
+
+(defun ofc-token--unregister-change-tracker ()
+  (when ofc-token--change-tracker
+    (track-changes-unregister ofc-token--change-tracker)
+    (setq ofc-token--change-tracker nil)))
 
 (defun ofc-token--before-buffer-killed ()
-  (ofc-token--destroy-buffer-tokens (current-buffer)))
+  (ofc-token--unregister-change-tracker)
+  (ofc-token--destroy-buffer-tokens))
 
 (defun ofc-token--after-buffer-created ()
+  (ofc-token--destroy-buffer-tokens)
   (add-hook 'after-save-hook #'ofc-token--after-buffer-saved 0 t)
   (add-hook 'kill-buffer-hook #'ofc-token--before-buffer-killed 0 t)
   (setq ofc-token--matched-stack '())
-  (ofc-token--update-buffer-tokens (current-buffer)))
+  (ofc-token--unregister-change-tracker)
+  (save-restriction
+    (widen)
+    (ofc-token--load-buffer-tokens-in-region (point-min) (point-max)))
+  (ofc-token--register-change-tracker))
 
 (provide 'ofc-token)
