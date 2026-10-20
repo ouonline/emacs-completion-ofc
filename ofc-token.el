@@ -23,11 +23,13 @@
 
 ;; `candidate-list' is a list of strings, each of which has the following text properties:
 ;;   * `ofc-token-info': an instance of `ofc-token--token-info-s'.
-;;   * `ofc-match-score': the cost of turning the current input into this token, one
-;;     point per character the token adds to the input, plus one point per matched
-;;     character whose case differs from the input.  that is the edit distance of
-;;     the alignment `ofc--fuzzy-compare' found, and the lower it is, the earlier
-;;     the candidate is sorted.
+;;   * `ofc-match-score': the sorting key of the candidate, the higher the earlier.
+;;     Its high bits are `used-freq', so more frequently used tokens come first.
+;;     Its low 16 bits are the negated cost of turning the current input into this
+;;     token, one point per character the token adds to the input, plus one point
+;;     per matched character whose case differs from the input.  That is the edit
+;;     distance of the alignment `ofc--fuzzy-compare' found, so among tokens with
+;;     the same frequency the smaller edit distance comes first.
 ;;   * `ofc-matched-regions': a list with the form `((begin1 . end1) (begin2 . end2) ...)`
 (cl-defstruct ofc-token--matched-item-s downcased-input candidate-list)
 
@@ -163,9 +165,10 @@ fuzzy scan.  Character code collisions only cause false positives."
                     text-idx reversed-matched-regions))))
       (let ((new-candidate-token (substring-no-properties token)))
         (add-text-properties 0 token-length
-                             (list :ofc-token-info token-info
-                                   :ofc-match-score (+ token-length case-penalty)
-                                   :ofc-matched-regions (nreverse reversed-matched-regions))
+                             (list :ofc-matched-regions (nreverse reversed-matched-regions)
+                                   :ofc-match-score (- (ash (ofc-token--token-info-s-used-freq token-info) 16)
+                                                       token-length case-penalty)
+                                   :ofc-token-info token-info)
                              new-candidate-token)
         new-candidate-token))))
 
@@ -214,17 +217,10 @@ fuzzy scan.  Character code collisions only cause false positives."
     (car ofc-token--matched-stack)))
 
 (defun ofc-token--sort-candidate-list (candidate-list)
-  (cl-stable-sort candidate-list
-                  (lambda (a b)
-                    (let ((freq-a (ofc-token--token-info-s-used-freq
-                                   (get-text-property 0 :ofc-token-info a)))
-                          (freq-b (ofc-token--token-info-s-used-freq
-                                   (get-text-property 0 :ofc-token-info b))))
-                      (if (> freq-a freq-b)
-                          t
-                        (when (= freq-a freq-b)
-                          (< (get-text-property 0 :ofc-match-score a)
-                             (get-text-property 0 :ofc-match-score b))))))))
+  (sort candidate-list
+        :key (lambda (c) (get-text-property 0 :ofc-match-score c))
+        :lessp #'>
+        :in-place t))
 
 (defun ofc-token--find-candidates (input &optional predicate)
   (let* ((input-length (length input))
