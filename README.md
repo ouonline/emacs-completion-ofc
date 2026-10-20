@@ -2,7 +2,7 @@
 
 These are fuzzy completion backends for the native completion-at-point-functions(`CAPF`).
 
-Candidates are case sensitive but the matching behavior is not. Modified or newly inserted words of a buffer cannot be found until this buffer is saved. Candidates are sorted by their used frequencies and similarities.
+The matching behavior is case insensitive. Candidates are sorted by their used frequencies and similarities.
 
 `track-changes`(included in Emacs >= 30 and available in MELPA) is required.
 

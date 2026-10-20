@@ -333,16 +333,21 @@ fuzzy scan.  Character code collisions only cause false positives."
                  before
                  (buffer-substring-no-properties end stop)))))))
 
-(defun ofc-token--update-tokens-from-tracker ()
-  (track-changes-fetch ofc-token--change-tracker
-                       #'ofc-token--update-tokens-in-region))
-
-(defun ofc-token--after-buffer-saved ()
-  (setq ofc-token--matched-stack '())
-  (ofc-token--update-tokens-from-tracker))
+(defun ofc-token--update-tokens-from-tracker (buffer)
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (track-changes-fetch ofc-token--change-tracker
+                           #'ofc-token--update-tokens-in-region))
+    (setq ofc-token--matched-stack '())))
 
 (defun ofc-token--register-change-tracker ()
-  (setq ofc-token--change-tracker (track-changes-register #'ignore)))
+  (setq ofc-token--change-tracker
+        (track-changes-register
+         (lambda (_tracker_id)
+           (run-with-idle-timer
+            0.2 nil
+            #'ofc-token--update-tokens-from-tracker
+            (current-buffer))))))
 
 (defun ofc-token--unregister-change-tracker ()
   (when ofc-token--change-tracker
@@ -355,7 +360,6 @@ fuzzy scan.  Character code collisions only cause false positives."
 
 (defun ofc-token--after-buffer-created ()
   (ofc-token--destroy-buffer-tokens)
-  (add-hook 'after-save-hook #'ofc-token--after-buffer-saved 0 t)
   (add-hook 'kill-buffer-hook #'ofc-token--before-buffer-killed 0 t)
   (setq ofc-token--matched-stack '())
   (ofc-token--unregister-change-tracker)
