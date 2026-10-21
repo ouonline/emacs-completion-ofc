@@ -40,9 +40,9 @@
      predicate))))
 
 (defun capf-ofc-token ()
-  (let ((range (ofc-token--grab-prefix-range)))
-    (when range
-      (list (car range) (cdr range)
+  (let ((prefix-length (ofc-token--grab-prefix-length)))
+    (when (> prefix-length 0)
+      (list (- (point) prefix-length) (point)
             #'capf-ofc-token--completion-table
             :exclusive 'no
             :exit-function #'capf-ofc-token--exit))))
@@ -54,8 +54,8 @@
 (add-hook 'after-change-major-mode-hook
           #'capf-ofc-token--after-change-major-mode)
 
-(defun capf-ofc-token--try-completion (_string _collection _predicate _point)
-  (cons "" 0))
+(defun capf-ofc-token--try-completion (string _collection _predicate point)
+  (cons string point))
 
 (defun capf-ofc-token--hilit (candidate)
   "Highlight the matched regions of CANDIDATE in place and return it."

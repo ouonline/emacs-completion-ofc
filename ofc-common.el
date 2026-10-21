@@ -13,7 +13,7 @@ indexes."
           (pattern-idx 0))
       (while (and (< text-idx text-length)
                   (< pattern-idx pattern-length))
-        (when (eq (elt text text-idx) (elt pattern pattern-idx))
+        (when (eq (aref text text-idx) (aref pattern pattern-idx))
           (when matched-hook-func
             (funcall matched-hook-func text-idx pattern-idx))
           (cl-incf pattern-idx))
