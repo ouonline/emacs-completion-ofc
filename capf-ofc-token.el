@@ -2,6 +2,9 @@
 
 (require 'ofc-token)
 
+(defcustom capf-ofc-token-min-trigger-len 4
+  "minimum length of prefix that will trigger completion")
+
 (defun capf-ofc-token--candidates (string predicate _action)
   (ofc-token--find-candidates string predicate))
 
@@ -41,7 +44,7 @@
 
 (defun capf-ofc-token ()
   (let ((prefix-length (ofc-token--grab-prefix-length)))
-    (when (> prefix-length 0)
+    (when (>= prefix-length capf-ofc-token-min-trigger-len)
       (list (- (point) prefix-length) (point)
             #'capf-ofc-token--completion-table
             :exclusive 'no

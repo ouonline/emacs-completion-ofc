@@ -7,8 +7,8 @@
 ;; ------------------------------------------------------------------------- ;;
 ;; settings
 
-;; minimum length of tokens that are indexed
-(defvar ofc-token-min-len 4)
+(defcustom ofc-token-min-len 4
+  "minimum length of tokens that are indexed")
 
 ;; ------------------------------------------------------------------------- ;;
 ;; struct definitions
