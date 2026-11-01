@@ -6,7 +6,7 @@ Fuzzy completion for Emacs' native completion-at-point facility, plus extensions
 
 `emacs-completion-ofc` adds fuzzy completion to Emacs' native `completion-at-point-functions` (CAPF) and includes quality-of-life extensions for `fido-mode`.
 
-The token backend indexes words of four or more characters (by default) across every buffer where it is enabled, keeps the index current while you type, and matches input case-insensitively as a subsequence. Candidates are ranked by lifetime usage frequency, then match quality, annotated with a source buffer, and shown with matched characters highlighted. A fuzzy path-candidate helper and the fido extras are included. Requires Emacs 30+ (`track-changes`).
+The token backend indexes words of four or more characters (by default) across every buffer where it is enabled, keeps the index current while you type, and matches input case-insensitively as a subsequence. Candidates are ranked by lifetime usage frequency, then match quality, annotated with a source buffer, and shown with matched characters highlighted. A path-completion backend (`capf-ofc-path`) and the fido extras are included. Requires `track-changes`(bulitin in Emacs >=30 and can be installed from MELPA).
 
 ## Features
 
@@ -14,7 +14,7 @@ The token backend indexes words of four or more characters (by default) across e
 - **Fuzzy matching** — case-insensitive subsequence matching over the buffer's syntax-table words.
 - **Ranking** — most-used tokens first; ties favor shorter tokens and exact-case matches.
 - **Completion UI** — source-buffer annotations and matched-region highlighting, with lazy highlighting when supported.
-- **Path candidates** — `ofc-path` provides cached fuzzy matching for absolute, relative, and `~` paths.
+- **Path completion** — `capf-ofc-path` provides cached fuzzy matching for absolute, relative, and `~` paths.
 - **Fido extras** — buffer/recent-file switching, directory-aware `/` and `RET`, and `./` filtering.
 
 ## Requirements
@@ -47,6 +47,28 @@ Invoke your usual CAPF command (for example `completion-at-point`, bound to
 Customize `ofc-token-min-len` (default 4) to change the shortest token that is
 indexed. Set it before the buffer is indexed.
 
+### Path completion
+
+```lisp
+(require 'capf-ofc-path)
+
+(add-hook 'prog-mode-hook
+          (lambda ()
+            (add-hook 'completion-at-point-functions '(capf-ofc-path))))
+```
+
+`capf-ofc-path` completes a path-like token at point (one containing `/`),
+including absolute, relative, and `~` paths. To use it together with
+`capf-ofc-token`:
+
+```lisp
+(setq-local completion-at-point-functions
+            '(capf-ofc-token capf-ofc-path))
+```
+
+Directory candidates are shown with a trailing `/`, which is removed when
+completion exits.
+
 ### Fido extras
 
 ```lisp
@@ -69,6 +91,8 @@ indexed. Set it before the buffer is indexed.
 | --- | --- |
 | `capf-ofc-token.el` | CAPF token-completion backend |
 | `ofc-token.el` | Token index, incremental updates, and ranking |
+| `capf-ofc-path.el` | CAPF path-completion backend |
+| `ofc-path.el` | Path candidate cache, matching, and completion helpers |
 | `ofc-common.el` | Shared fuzzy subsequence matcher |
 | `ofc-fido-extra.el` | `fido-mode` commands and key bindings |
 
@@ -78,6 +102,7 @@ indexed. Set it before the buffer is indexed.
 - Only buffers with `capf-ofc-token` in `completion-at-point-functions` are indexed.
 - Tokens shorter than `ofc-token-min-len` are ignored, and buffers whose names contain `*temp*` are skipped.
 - Matching is case-insensitive, but completed text keeps its original spelling.
+- Path completion applies to tokens containing `/`; the path cache is cleared when completion exits.
 
 ## Screenshots
 

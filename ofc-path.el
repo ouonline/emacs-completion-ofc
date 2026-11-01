@@ -17,7 +17,7 @@
 
 ;; -----------------------------------------------------------------------------
 
-(defun ofc-path--grab-prefix ()
+(defun ofc-path--grab-prefix-info ()
   (when (looking-back ofc-path-token-pattern (line-beginning-position) t)
     (let* ((prefix (match-string-no-properties 0))
            (parent-dir nil)
@@ -56,18 +56,27 @@
     (when (string= (car item) dir)
       (cl-return (cadr item)))))
 
+(defun ofc-path--filter-entry-list (parent-dir entry-list)
+  (let ((result '()))
+    (mapc (lambda (entry)
+            (unless (or (string= entry ".")
+                        (string= entry ".."))
+              (let ((full-path (concat parent-dir entry)))
+                (if (file-directory-p full-path)
+                    (push (concat entry "/") result)
+                  (push entry result)))))
+          entry-list)
+    result))
+
 (defun ofc-path--get-entry-list (parent-dir)
   (let ((entry-list (ofc-path--find-entry-list-in-cache parent-dir)))
     (when (and (not entry-list)
                (file-directory-p parent-dir))
       (let ((current-entry-list (directory-files parent-dir)))
         (when current-entry-list
-          (setq entry-list (mapcar (lambda (entry)
-                                     (let ((full-path (concat parent-dir entry)))
-                                       (if (file-directory-p full-path)
-                                           (concat entry "/")
-                                         entry)))
-                                   current-entry-list))
+          (setq entry-list (ofc-path--filter-entry-list
+                            parent-dir
+                            current-entry-list))
           (when entry-list
             (push (list parent-dir entry-list) ofc-path--entry-cache)))))
     entry-list))
@@ -87,6 +96,8 @@
             entry-result))))))
 
 (defun ofc-path--post-completion ()
+  (when (eq (char-before) ?/)
+    (delete-char -1))
   (setq ofc-path--entry-cache '()))
 
 (provide 'ofc-path)
